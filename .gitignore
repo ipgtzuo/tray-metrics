@@ -1,0 +1,26 @@
+# 依赖（体积大，按需 npm install 安装）
+node_modules/
+
+# 运行 / 日志
+run.log
+run-out.log
+run2.log
+run2-out.log
+selftest-result.json
+config.json
+
+# 开发期截图产物（非源码）
+shot-*.png
+foot-*.png
+live-*.png
+tray-*.png
+tray-real-*.png
+live-panel.json
+live-screen.png
+
+# 保留 icon-preview.png 用于 README 展示
+
+# 编辑器 / 系统
+.DS_Store
+*.genie
+.vscode/

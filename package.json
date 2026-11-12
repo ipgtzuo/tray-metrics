@@ -1,0 +1,22 @@
+{
+  "name": "tray-metrics",
+  "productName": "TrayMetrics",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Windows tray icon showing one live system metric at a time",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "probe": "node src/probe.js",
+    "selftest": "electron src/selftest.js",
+    "shot": "electron src/shot.js",
+    "footcheck": "electron src/footcheck.js",
+    "icons": "electron src/preview.js",
+    "trayshot": "electron src/trayshot.js",
+    "trayascii": "electron src/trayascii.js",
+    "ink": "electron src/inkcheck.js"
+  },
+  "devDependencies": {
+    "electron": "45.2.3"
+  }
+}
