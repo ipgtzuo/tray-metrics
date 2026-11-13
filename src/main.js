@@ -221,7 +221,8 @@ function setType(k) {
   pushSnapshot(false);
 }
 
-/* ---------------- 生命周期 ---------------- */
+/* ---------------- 跨 exe 全局单实例锁 ----------------
+ * 重复启动时直接退出，并让已运行的实例弹出详情面板。 */
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {

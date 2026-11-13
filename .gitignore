@@ -1,15 +1,17 @@
-# 依赖（体积大，按需 npm install 安装）
+# 依赖（体积大，用 npm ci 安装）
 node_modules/
 
-# 运行 / 日志
-run.log
-run-out.log
-run2.log
-run2-out.log
+# 构建产物（体积大，放 GitHub Releases，不进仓库）
+dist/
+*.exe
+*.blockmap
+
+# 运行 / 诊断日志
+*.log
 selftest-result.json
 config.json
 
-# 开发期截图产物（非源码）
+# 开发期截图 / 视频 / 字体等临时素材（非源码）
 shot-*.png
 foot-*.png
 live-*.png
@@ -17,10 +19,20 @@ tray-*.png
 tray-real-*.png
 live-panel.json
 live-screen.png
-
-# 保留 icon-preview.png 用于 README 展示
+_frame.png
+end.png
+title.png
+_video_tmp/
+*_tmp/
+*.ttf
+*.mp4
+make_video.py
 
 # 编辑器 / 系统
 .DS_Store
 *.genie
 .vscode/
+.idea/
+Thumbs.db
+
+# 保留 icon-preview.png、icon-real-24px.png、docs/*.png 用于 README 展示

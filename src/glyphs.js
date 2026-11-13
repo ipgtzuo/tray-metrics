@@ -12,14 +12,10 @@
  *
  * 字形缓存按 (字重, 字号) 存，跨图标尺寸复用；只有换 DPI 时才补新字号。
  */
-const { app, BrowserWindow } = require('electron');
+const { BrowserWindow } = require('electron');
 
-/*
- * 栅格化窗口是「一次性」的：渲染完立刻销毁。若此时应用里没有别的窗口，
- * Electron 会触发默认的 window-all-closed → 直接退出应用（后续页面全部
- * ERR_FAILED）。托盘应用本就不该因为窗口全关而退出，这里显式接管该事件。
- */
-app.on('window-all-closed', () => {});
+/* 窗口全关不退出由 main.js 的 window-all-closed 统一接管；
+ * 本模块只负责「一次性」栅格化窗口的创建与销毁。 */
 
 /* 图标上可能出现的字符：数字、小数点、负号、缩写字母 */
 const CHARS = '0123456789.-:%/ABCDEFGHIJKLMNOPQRSTUVWXYZ';

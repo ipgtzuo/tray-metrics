@@ -1,0 +1,44 @@
+name: Build Windows
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # electron-builder.js 里 electronDist 复用 node_modules/electron/dist，
+      # sign 为 no-op（无商业证书），一次构建产出 NSIS 安装包 + 便携版。
+      - name: Build NSIS installer and portable exe
+        run: npm run dist
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrayMetrics-windows-x64
+          path: dist/*.exe
+          if-no-files-found: error
+
+      - name: Attach exe to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
+          generate_release_notes: true
