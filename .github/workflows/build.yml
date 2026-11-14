@@ -24,10 +24,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # electron-builder.js 里 electronDist 复用 node_modules/electron/dist，
-      # sign 为 no-op（无商业证书），一次构建产出 NSIS 安装包 + 便携版。
+      # sign 为 no-op（无商业证书）；一次构建产出 NSIS 安装包 + 便携版。
+      # 用 bash 显式调用本地 electron-builder，并打印 dist 便于排查产物路径。
       - name: Build NSIS installer and portable exe
-        run: npm run dist
+        shell: bash
+        env:
+          DEBUG: electron-builder
+        run: |
+          npx --no-install electron-builder --win --x64 --config electron-builder.js
+          echo "=== dist contents ==="
+          ls -lh dist/
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4

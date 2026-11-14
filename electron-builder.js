@@ -2,15 +2,18 @@
 // electron-builder 配置。
 // 注意：sign 是「win.sign」子项（根级没有 sign 属性），用 no-op 覆盖默认 Authenticode 签名，
 // 从而彻底跳过 winCodeSign 工具链（本机无代码签名证书，未签名 exe 本地/个人使用无碍）。
-// electronDist 指向本地已下载的 electron 运行时，避免联网下载。
+// electronDist 仅在本地确实已下载 Electron 运行时才复用（避免重复联网）；
+// CI 上该目录可能不存在，此时不设置该字段，交给 electron-builder 自行获取。
 const path = require('path');
+const fs = require('fs');
+const localElectronDist = path.join(__dirname, 'node_modules', 'electron', 'dist');
 
 module.exports = {
   appId: 'com.traymetrics.app',
   productName: 'TrayMetrics',
   copyright: 'Copyright © 2026',
   icon: 'assets/icon.ico',
-  electronDist: path.join(__dirname, 'node_modules/electron/dist'),
+  ...(fs.existsSync(localElectronDist) ? { electronDist: localElectronDist } : {}),
   files: [
     'src/**/*',
     'assets/**/*',
