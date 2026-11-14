@@ -115,7 +115,7 @@ npm run dist:portable # 只出便携版
 
 CI 见 [`.github/workflows/build.yml`](./.github/workflows/build.yml)：`git tag v1.0.0 && git push origin v1.0.0` 即触发 Windows 构建并自动上传 Release 附件。
 
-**项目介绍页**：[`docs/index.html`](./docs/index.html) 是一个自包含的单页介绍站，在 Settings → Pages 选 `main /docs` 即可发布；仓库 About 描述、Topics、首个 Release 文案与上架自检清单见 [`docs/GITHUB_SETUP.md`](./docs/GITHUB_SETUP.md)。首次推送用 [`push-to-github.ps1`](./push-to-github.ps1)，它会自动把介绍页里的 `OWNER/REPO` 占位符替换成真实仓库地址。
+**项目介绍页**：[`docs/index.html`](./docs/index.html) 是一个自包含的单页介绍站，在 Settings → Pages 选 `main /docs` 即可发布（本项目地址 <https://ipgtzuo.github.io/tray-metrics/>）；仓库 About 描述、Topics、首个 Release 文案与上架自检清单见 [`docs/GITHUB_SETUP.md`](./docs/GITHUB_SETUP.md)。仓库地址 <https://github.com/ipgtzuo/tray-metrics>，如需迁移到其它仓库可用 [`push-to-github.ps1`](./push-to-github.ps1) 自动改写链接并重新推送。
 
 > **从终端/脚本启动 exe 时静默退出？** 若当前 shell 注入了 `ELECTRON_RUN_AS_NODE=1`（某些 IDE / Agent 运行时会注入），Electron 会被当成纯 Node 运行，表现为「退出码 0、界面不出现、应用代码完全没加载」。这与打包无关，去掉该环境变量再启动即可（`start.bat` 已处理），双击 exe 不受影响。
 

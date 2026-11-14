@@ -2,6 +2,9 @@
 
 本文件是「推送之后在 GitHub 网页上要填什么」的现成文案，可直接复制粘贴。仓库内的 `README.md` 是完整项目说明，`docs/index.html` 是可开启 GitHub Pages 的单页介绍站。
 
+**本项目仓库**：<https://github.com/ipgtzuo/tray-metrics>
+**介绍页**：<https://ipgtzuo.github.io/tray-metrics/>
+
 ## 1. 仓库基本信息（Settings → General → About）
 
 **Description（≤ 350 字，直接复制）**
@@ -10,7 +13,7 @@
 Windows 托盘实时系统监控：网速 / 整机功率 / CPU / 内存 / 磁盘 / 温度 / GPU，右键切换类型，左键弹出详情面板。Electron + 纯 Node 采集，零原生依赖，完全本地运行不上传数据。
 ```
 
-**Website**：推送并开启 Pages 后填 `https://<用户名>.github.io/<仓库名>/`
+**Website**：`https://ipgtzuo.github.io/tray-metrics/`
 
 **Topics（建议 10 个）**
 
@@ -51,24 +54,30 @@ TrayMetrics 首个正式版本。托盘图标一次显示一种指标，右键�
 
 - Source：`Deploy from a branch`
 - Branch：`main` → 目录选 `/docs` → Save
-- 几秒后即可访问 `https://<用户名>.github.io/<仓库名>/`
+- 几秒后即可访问 `https://ipgtzuo.github.io/tray-metrics/`
 
-`docs/index.html` 里的 `OWNER/REPO` 占位符会在执行 `push-to-github.ps1` 时自动替换成真实仓库地址；若是手动推送，全局替换一次即可。
+`docs/index.html` 里的仓库链接已指向 `ipgtzuo/tray-metrics`。若 fork 到其它账号，把 `OWNER/REPO` 全局替换成新地址即可（或直接跑 `push-to-github.ps1`，它会自动替换）。
 
-## 4. 推送步骤（本机一键）
+## 4. 推送与迁移
 
-1. GitHub 新建**空仓库**（不要勾 Add a README / .gitignore / License）。
-2. 生成 Fine-grained PAT：仅授权该仓库，权限 `Contents: Read & Write`（classic token 用 `repo`）。
-3. 在项目根目录执行：
+仓库与首次推送已完成。以后本地改动照常规操作即可：
+
+```bash
+git add -A
+git commit -m "your message"
+git push origin main
+```
+
+**迁移到新仓库时**：在 GitHub 新建空仓库（不要勾 Add a README / .gitignore / License），生成仅授权该仓库、`Contents: Read & Write` 的 Fine-grained Token，然后：
 
 ```powershell
 $env:GITHUB_TOKEN = 'github_pat_xxx'
 .\push-to-github.ps1 -RepoUrl 'https://github.com/<用户名>/<仓库名>.git'
 ```
 
-脚本会自动：把 `docs/index.html` 的仓库占位符替换成真实地址 → 提交 → 本地分支改名为 `main` → 设置 remote → 用一次性 HTTP header 推送（Token 不写入 `.git/config`）。
+脚本会自动：改写介绍页里的仓库链接 → 提交 → 设置 remote → 用一次性 HTTP header 推送（Token 不写入 `.git/config`）。
 
-4. 发布带 exe 的 Release：
+**发布带 exe 的 Release**：
 
 ```bash
 git tag v1.0.0
