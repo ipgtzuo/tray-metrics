@@ -199,12 +199,19 @@ function positionPanel() {
   const b = tray.getBounds();
   const display = screen.getDisplayNearestPoint({ x: b.x + b.width / 2, y: b.y + b.height / 2 });
   const wa = display.workArea;
-  const [w, h] = panel.getSize();
+  /* 一律使用设计尺寸，绝不读 panel.getSize() 来算位置。
+   * 在 150% 缩放的 Windows 上，height:506 建出的窗口 getBounds() 会回报 508，
+   * 且每次 setPosition 后宽高还会再漂 1~2px（DPI 舍入）。用这个被污染的 h 去算
+   * y = 托盘y - h - 8，底边固定、顶边上移，h 就越读越大，形成正反馈：
+   * 每点一次托盘，面板就长高一点、左移一点。宽度同理。
+   * 用固定尺寸 + setBounds 明确写入，无论调用多少次都不会累积。 */
+  const w = PANEL_W, h = lastPanelH;
   let x = Math.round(b.x + b.width / 2 - w / 2);
   x = Math.max(wa.x + 8, Math.min(x, wa.x + wa.width - w - 8));
   let y = b.y - h - 8;
   if (y < wa.y + 8) y = b.y + b.height + 8; // 任务栏在顶部时改为向下弹
-  panel.setPosition(x, Math.round(y));
+  diag('positionPanel', x, Math.round(y), w, h);
+  panel.setBounds({ x, y: Math.round(y), width: w, height: h });
 }
 function pushSnapshot(listMode, force = false) {
   if (!panel || panel.isDestroyed() || (!force && !panel.isVisible())) return;
@@ -234,10 +241,12 @@ function openPanel(listMode = false, force = false) {
     'vis=' + (panel && !panel.isDestroyed() ? panel.isVisible() : 'n/a'));
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   // 首次点击才创建窗口；启动时没有 BrowserWindow，Electron 也不会拉起渲染/GPU 进程
-  if (!panel || panel.isDestroyed()) createPanel();
+  const created = !panel || panel.isDestroyed();
+  if (created) createPanel();
   if (panel.isVisible() && !force) { hidePanel(); return; }
   pendingListMode = listMode;
-  positionPanel();
+  // 只在新建窗口时定位。反复 show 同一窗口不重写几何，避免 DPI 舍入逐次累积
+  if (created) positionPanel();
   panelShownAt = Date.now();
   panel.show();
   panel.moveTop();                 // 提到最上层，避免被刚激活的窗口盖住
@@ -320,16 +329,16 @@ if (!app.requestSingleInstanceLock()) {
     // 保证「全部指标 / 数据源」永远在卡片内，不被窗口裁掉
     ipcMain.on('panel-height', (_e, h) => {
       if (!panel || panel.isDestroyed() || !tray) return;
-      const open = panel.getBounds();
       const tb = tray.getBounds();
       const wa = screen.getDisplayNearestPoint({ x: tb.x + tb.width / 2, y: tb.y + tb.height / 2 }).workArea;
       const maxH = Math.min(PANEL_MAX_H, wa.height - 60);
       const nh = Math.round(Math.max(PANEL_MIN_H, Math.min(Number(h) || 0, maxH)));
-      if (!Number.isFinite(nh) || Math.abs(nh - open.height) < 2) return;
+      // 与「设计高度」比较，而不是与窗口读回尺寸比较：后者在 150% 缩放下本身就有偏差
+      if (!Number.isFinite(nh) || nh === lastPanelH) return;
+      diag('panel-height', h, '->', nh);
       lastPanelH = nh; // 记住高度，下次重建面板时直接以该高度出现，避免先矮后高的跳动
       if (panelHSaveTimer) clearTimeout(panelHSaveTimer);
       panelHSaveTimer = setTimeout(() => { panelHSaveTimer = null; saveConfig(); }, 800);
-      panel.setBounds({ x: open.x, y: open.y + open.height - nh, width: open.width, height: nh });
       positionPanel();
     });
 
@@ -349,6 +358,8 @@ if (!app.requestSingleInstanceLock()) {
     const onDisplayChange = () => {
       const p = trayPixelSize();
       prepare([p, p * 4]).then(() => { lastIconKey = ''; updateTray(true); }).catch(() => {});
+      // 任务栏位置 / 缩放变化后，把已打开的面板重新贴到托盘上方
+      if (panel && !panel.isDestroyed() && panel.isVisible()) positionPanel();
     };
     screen.on('display-metrics-changed', onDisplayChange);
     screen.on('display-added', onDisplayChange);
