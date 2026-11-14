@@ -2,11 +2,13 @@
 const { app, Tray, Menu, BrowserWindow, nativeImage, screen, ipcMain, shell, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { Metrics, TYPES, KEYS } = require('./metrics');
 const { makeIcon, fallbackIcon, prepare, ready } = require('./icon');
+const hwinfo = require('./hwinfo');
 
 const CONFIG_FILE = () => path.join(app.getPath('userData'), 'config.json');
-let tray = null, panel = null, menu = null;
+let tray = null, panel = null, menu = null, sysWindow = null, sysPending = false;
 let current = 'net', taskbarTheme = 'auto', iconMode = 'compact';
 let welcomeShown = false, quitting = false;
 let platformBaseW = 12, wallPowerUrl = '';
@@ -158,6 +160,7 @@ function buildMenu() {
     }),
     { type: 'separator' },
     { label: '显示全部指标', click: () => openPanel(true, true) },
+    { label: '系统信息…', click: () => openSysInfo() },
     { label: '设置', submenu: settings },
     { type: 'separator' },
     { label: '退出', click: () => { quitting = true; app.quit(); } }
@@ -268,6 +271,69 @@ function setType(k) {
   pushSnapshot(false);
 }
 
+/* ---------------- 系统信息窗口 ----------------
+ * 独立窗口、固定初始尺寸，刻意不复用详情面板：面板高度由内容自适应，
+ * 之前在 150% 缩放下因读回尺寸漂移踩过坑，这里完全不碰那套逻辑。
+ * 硬件信息变化极慢，用磁盘缓存秒开，后台再静默重采并推送。 */
+function displayList() {
+  const primary = screen.getPrimaryDisplay();
+  return screen.getAllDisplays().map(d => ({
+    id: d.id, label: d.label || '', primary: !!(primary && d.id === primary.id),
+    w: d.bounds.width, h: d.bounds.height, x: d.bounds.x, y: d.bounds.y,
+    physW: d.size && d.size.width, physH: d.size && d.size.height,
+    scale: d.scaleFactor, freq: d.displayFrequency || null,
+    internal: !!d.internal, rotation: d.rotation || 0, colorDepth: d.colorDepth || null
+  }));
+}
+function liveFields() {
+  const s = metrics.s;
+  return {
+    cpuMHz: s.cpuActualMHz, cpuPct: s.cpuPct,
+    gpuPct: s.gpuPct, gpuTempC: s.gpuTempC, gpuW: s.gpuW, gpuMemGB: s.gpuMemGB,
+    powerW: s.powerW, memUsedGB: s.memUsedGB,
+    batteryPct: s.batteryPct, batteryState: s.batteryState
+  };
+}
+function sysPayload(data) {
+  return { ...data, displays: displayList(), live: liveFields() };
+}
+function broadcastSysInfo(data) {
+  if (sysWindow && !sysWindow.isDestroyed()) {
+    sysWindow.webContents.send('sysinfo:data', sysPayload(data));
+  }
+}
+function ensureSysCollect(force) {
+  if (sysPending) return;
+  sysPending = true;
+  hwinfo.collect(!!force)
+    .then(broadcastSysInfo)
+    .catch(e => broadcastSysInfo({
+      meta: { ok: false, error: e.message, collectedAt: new Date().toISOString() }
+    }))
+    .finally(() => { sysPending = false; });
+}
+function openSysInfo() {
+  if (sysWindow && !sysWindow.isDestroyed()) { sysWindow.show(); sysWindow.focus(); return; }
+  sysWindow = new BrowserWindow({
+    width: 880, height: 700, minWidth: 680, minHeight: 480,
+    show: false, frame: false, resizable: true, backgroundColor: '#24242e',
+    title: '系统信息 · TrayMetrics', skipTaskbar: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true, nodeIntegration: false, sandbox: false
+    }
+  });
+  sysWindow.once('ready-to-show', () => { if (!sysWindow.isDestroyed()) sysWindow.show(); });
+  sysWindow.on('closed', () => { sysWindow = null; });
+  sysWindow.loadFile(path.join(__dirname, 'hwinfo.html'));
+}
+
+/* 无交互自检时换一个独立 userData：既不与正在运行的托盘实例抢单实例锁，
+ * 也不读写用户的真实配置 / 硬件信息缓存。 */
+if (process.env.TM_SYSINFO_DEBUG) {
+  app.setPath('userData', path.join(os.tmpdir(), 'TrayMetrics-sysinfo-debug'));
+}
+
 /* ---------------- 跨 exe 全局单实例锁 ----------------
  * 重复启动时直接退出，并让已运行的实例弹出详情面板。 */
 if (!app.requestSingleInstanceLock()) {
@@ -277,6 +343,7 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     loadConfig();
+    hwinfo.setCacheDir(app.getPath('userData'));
     Menu.setApplicationMenu(null);
 
     // 先用系统真实字体把字形栅格化成图集（一次性，随后销毁隐藏窗口），
@@ -329,6 +396,17 @@ if (!app.requestSingleInstanceLock()) {
     // 去抖合并成一次，所以这里不需要也不应该再做任何事。
     tray.on('double-click', () => diag('tray double-click (ignored)'));
 
+    // 系统信息：先同步返回磁盘缓存让窗口秒开，再后台重采并推送更新
+    ipcMain.handle('sysinfo:get', (_e, force) => {
+      const cachedInfo = hwinfo.peek();
+      ensureSysCollect(!!force);
+      if (cachedInfo) return { ...sysPayload(cachedInfo), fromCache: true };
+      return { pending: true, ...sysPayload({ meta: null }) };
+    });
+    ipcMain.on('sysinfo:close', () => {
+      if (sysWindow && !sysWindow.isDestroyed()) sysWindow.close();
+    });
+
     ipcMain.on('set-type', (_e, k) => setType(k));
     ipcMain.on('close-panel', () => hidePanel());
     ipcMain.on('request-snapshot', (_e, listMode) => pushSnapshot(listMode));
@@ -352,6 +430,10 @@ if (!app.requestSingleInstanceLock()) {
     metrics.on('tick', () => {
       updateTray();
       pushSnapshot();
+      // 系统信息窗口开着时，实时字段跟着采样一起刷新（静态硬件部分不重算）
+      if (sysWindow && !sysWindow.isDestroyed() && sysWindow.isVisible()) {
+        sysWindow.webContents.send('sysinfo:live', liveFields());
+      }
     });
     metrics.on('error', e => console.error('[metrics]', e.message));
     metrics.setPlatformBase(platformBaseW);
@@ -389,7 +471,7 @@ if (!app.requestSingleInstanceLock()) {
     }
 
     // 首次运行提示一次，帮用户在托盘（常收在 ^ 隐藏区）里找到新图标
-    if (!welcomeShown) {
+    if (!welcomeShown && !process.env.TM_SYSINFO_DEBUG) {
       setTimeout(() => {
         if (!tray) return;
         try {
@@ -400,6 +482,39 @@ if (!app.requestSingleInstanceLock()) {
         } catch (_) {}
         welcomeShown = true; saveConfig();
       }, 1800);
+    }
+
+    // 无交互自检：TM_SYSINFO_DEBUG=1 启动后自动打开系统信息窗口，
+    // 等页面渲染出卡片后截图并导出状态，然后退出（用于验证新窗口链路）
+    if (process.env.TM_SYSINFO_DEBUG) {
+      const root = path.join(__dirname, '..');
+      setTimeout(() => openSysInfo(), 1200);
+      let tries = 0;
+      const iv = setInterval(async () => {
+        tries++;
+        try {
+          if (!sysWindow || sysWindow.isDestroyed()) return;
+          const cards = await sysWindow.webContents.executeJavaScript('document.querySelectorAll(".card").length');
+          if (cards > 0 || tries > 30) {
+            clearInterval(iv);
+            const img = await sysWindow.webContents.capturePage();
+            fs.writeFileSync(path.join(root, 'sysinfo-debug.png'), img.toPNG());
+            const state = await sysWindow.webContents.executeJavaScript(
+              'JSON.stringify({cards:document.querySelectorAll(".card").length,' +
+              'rows:document.querySelectorAll(".row").length,' +
+              'cardsText:Array.from(document.querySelectorAll(".card"),c=>c.innerText),' +
+              'subtitle:document.getElementById("subtitle").textContent,' +
+              'status:document.getElementById("status").textContent,' +
+              'gridHidden:document.getElementById("grid").hidden})');
+            fs.writeFileSync(path.join(root, 'sysinfo-debug.json'), state);
+            setTimeout(() => { quitting = true; app.quit(); }, 400);
+          }
+        } catch (e) {
+          clearInterval(iv);
+          fs.writeFileSync(path.join(root, 'sysinfo-debug.json'), JSON.stringify({ error: e.message }));
+          setTimeout(() => { quitting = true; app.quit(); }, 400);
+        }
+      }, 2000);
     }
   });
 
