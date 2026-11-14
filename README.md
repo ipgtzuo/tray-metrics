@@ -2,11 +2,19 @@
 
 > 一个常驻 Windows 托盘的实时系统监控小工具：托盘图标一次只显示一种指标（网速 / 整机功率 / CPU / 内存 / 磁盘 / 温度 / GPU），右键切换类型，左键弹出详情面板。纯本地运行，不联网、不上传任何数据。
 
-![Windows](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6?style=flat-square) ![Electron](https://img.shields.io/badge/Electron-45.2.3-47848F?style=flat-square) ![License](https://img.shields.io/badge/license-MIT-green?style=flat-square) ![No telemetry](https://img.shields.io/badge/telemetry-none-blue?style=flat-square)
+![Windows](https://img.shields.io/badge/platform-Windows%2010%2F11-0078D6?style=flat-square)
+
+![Electron](https://img.shields.io/badge/Electron-45.2.3-47848F?style=flat-square)
+
+![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)
+
+
+
+![No telemetry](https://img.shields.io/badge/telemetry-none-blue?style=flat-square)
 
 | 托盘图标（放大预览） | 左键弹出的详情面板 |
-| --- | --- |
-| ![托盘图标预览](./icon-preview.png) | ![详情面板](./docs/screenshot-panel.png) |
+| ---------- | --------- |
+| 托盘图标预览     | 详情面板      |
 
 ![全部指标面板](./docs/screenshot-list.png)
 
@@ -22,15 +30,15 @@
 
 ## 支持的指标
 
-| 类型 | 缩写 | 单位 | 数据来源 |
-| --- | --- | --- | --- |
-| 网速 | NET | MB/s | `netstat -e` 累计字节按真实时间戳差分（2s） |
-| 整机功率 | PWR | W | RAPL / Power Meter / nvidia-smi（实测优先，否则估算） |
-| CPU | CPU | % | `os.cpus()` 两次采样差分 |
-| 内存 | MEM | % | `os.totalmem` / `os.freemem`（2s） |
-| 磁盘 | DSK | % | `fs.statfsSync` / WMI（占用 2s，读写速率 10s） |
-| 温度 | TMP | °C | LibreHardwareMonitor `:8085` / `nvidia-smi` |
-| GPU | GPU | % | LibreHardwareMonitor GPU / `nvidia-smi` |
+| 类型   | 缩写  | 单位   | 数据来源                                        |
+| ---- | --- | ---- | ------------------------------------------- |
+| 网速   | NET | MB/s | `netstat -e` 累计字节按真实时间戳差分（2s）               |
+| 整机功率 | PWR | W    | RAPL / Power Meter / nvidia-smi（实测优先，否则估算）  |
+| CPU  | CPU | %    | `os.cpus()` 两次采样差分                          |
+| 内存   | MEM | %    | `os.totalmem` / `os.freemem`（2s）            |
+| 磁盘   | DSK | %    | `fs.statfsSync` / WMI（占用 2s，读写速率 10s）       |
+| 温度   | TMP | °C   | LibreHardwareMonitor `:8085` / `nvidia-smi` |
+| GPU  | GPU | %    | LibreHardwareMonitor GPU / `nvidia-smi`     |
 
 > **关于温度与 GPU 明细**：CPU/硬盘/风扇温度、GPU 核心温度需要 LibreHardwareMonitor（LHM）开启 Web Server（端口 8085）。LHM 是可选增强，不装也能用，只是少了温度来源。网速、功率、CPU、内存、磁盘均无需任何第三方软件。
 
@@ -40,10 +48,10 @@
 
 在本仓库的 **Releases** 页面下载（Windows x64）：
 
-| 文件 | 说明 |
-| --- | --- |
-| `TrayMetrics-<版本>-Portable.exe` | 免安装单文件版，双击即用，不写注册表，约 100MB |
-| `TrayMetrics-<版本>-Setup.exe` | NSIS 安装包，带开始菜单 / 桌面快捷方式 / 卸载程序 |
+| 文件                              | 说明                             |
+| ------------------------------- | ------------------------------ |
+| `TrayMetrics-<版本>-Portable.exe` | 免安装单文件版，双击即用，不写注册表，约 100MB     |
+| `TrayMetrics-<版本>-Setup.exe`    | NSIS 安装包，带开始菜单 / 桌面快捷方式 / 卸载程序 |
 
 程序未做商业代码签名，首次运行 Windows SmartScreen 可能提示「未知发布者」，点「更多信息 → 仍要运行」即可（也可自行构建并用自己的证书签名）。
 
@@ -74,12 +82,12 @@ npm start
 
 ## 设置
 
-| 设置 | 说明 |
-| --- | --- |
-| 重新检测数据源 | 重新探测 RAPL / LHM / nvidia-smi 可用性 |
-| 墙插功率配置 | 填入智能插座 HTTP 接口地址，可接入 AC 侧真实功率（含电源适配器损耗） |
-| 任务栏深浅 | 自动 / 浅色 / 深色，控制图标在深浅任务栏上的对比度 |
-| 开机自启 | 通过 `app.setLoginItemSettings` 注册开机启动 |
+| 设置      | 说明                                      |
+| ------- | --------------------------------------- |
+| 重新检测数据源 | 重新探测 RAPL / LHM / nvidia-smi 可用性        |
+| 墙插功率配置  | 填入智能插座 HTTP 接口地址，可接入 AC 侧真实功率（含电源适配器损耗） |
+| 任务栏深浅   | 自动 / 浅色 / 深色，控制图标在深浅任务栏上的对比度            |
+| 开机自启    | 通过 `app.setLoginItemSettings` 注册开机启动    |
 
 配置保存在 `%APPDATA%\TrayMetrics\config.json`，可直接编辑。
 
@@ -106,6 +114,8 @@ npm run dist:portable # 只出便携版
 ```
 
 CI 见 [`.github/workflows/build.yml`](./.github/workflows/build.yml)：`git tag v1.0.0 && git push origin v1.0.0` 即触发 Windows 构建并自动上传 Release 附件。
+
+**项目介绍页**：[`docs/index.html`](./docs/index.html) 是一个自包含的单页介绍站，在 Settings → Pages 选 `main /docs` 即可发布；仓库 About 描述、Topics、首个 Release 文案与上架自检清单见 [`docs/GITHUB_SETUP.md`](./docs/GITHUB_SETUP.md)。首次推送用 [`push-to-github.ps1`](./push-to-github.ps1)，它会自动把介绍页里的 `OWNER/REPO` 占位符替换成真实仓库地址。
 
 > **从终端/脚本启动 exe 时静默退出？** 若当前 shell 注入了 `ELECTRON_RUN_AS_NODE=1`（某些 IDE / Agent 运行时会注入），Electron 会被当成纯 Node 运行，表现为「退出码 0、界面不出现、应用代码完全没加载」。这与打包无关，去掉该环境变量再启动即可（`start.bat` 已处理），双击 exe 不受影响。
 
@@ -145,13 +155,13 @@ tray-monitor-app/
 
 ## 常见问题
 
-| 现象 | 处理 |
-| --- | --- |
-| 托盘看不到图标 | 点任务栏 `^` 展开隐藏图标区，把 TrayMetrics 拖到可见区；首次启动会有气泡提示。 |
-| 温度 / GPU 显示 `--` | 这两项依赖 LibreHardwareMonitor（开启 Web Server :8085）或 NVIDIA 驱动自带的 `nvidia-smi`，不装不影响其它指标。 |
-| 杀软报毒 / SmartScreen 拦截 | exe 未做商业签名，源码与构建脚本全部公开，可自行 `npm run dist` 复现构建。 |
-| 从 CI/脚本启动后立刻退出 | 检查并清除 `ELECTRON_RUN_AS_NODE` 环境变量，见上文「打包与发布」。 |
-| 想彻底卸载 | 安装包版走系统「应用和功能」；便携版直接删除 exe，再手动删 `%APPDATA%\TrayMetrics`。 |
+| 现象                    | 处理                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------- |
+| 托盘看不到图标               | 点任务栏 `^` 展开隐藏图标区，把 TrayMetrics 拖到可见区；首次启动会有气泡提示。                                      |
+| 温度 / GPU 显示 `--`      | 这两项依赖 LibreHardwareMonitor（开启 Web Server :8085）或 NVIDIA 驱动自带的 `nvidia-smi`，不装不影响其它指标。 |
+| 杀软报毒 / SmartScreen 拦截 | exe 未做商业签名，源码与构建脚本全部公开，可自行 `npm run dist` 复现构建。                                       |
+| 从 CI/脚本启动后立刻退出        | 检查并清除 `ELECTRON_RUN_AS_NODE` 环境变量，见上文「打包与发布」。                                         |
+| 想彻底卸载                 | 安装包版走系统「应用和功能」；便携版直接删除 exe，再手动删 `%APPDATA%\TrayMetrics`。                              |
 
 ## 贡献
 

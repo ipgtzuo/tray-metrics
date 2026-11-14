@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TrayMetrics — Windows 托盘实时系统监控</title>
+<meta name="description" content="一个常驻 Windows 托盘的实时系统监控小工具：网速、整机功率、CPU、内存、磁盘、温度、GPU，右键切换，左键看详情。纯本地运行，不上传任何数据。">
+<style>
+  :root{--bg:#f6f8fa;--card:#fff;--ink:#1f2328;--muted:#57606a;--line:#d8dee4;--accent:#0b7285;--accent-soft:#e3f2f4}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:"Segoe UI","Microsoft YaHei UI",system-ui,-apple-system,sans-serif;line-height:1.7}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:1000px;margin:0 auto;padding:0 24px}
+  header{border-bottom:1px solid var(--line);background:#fff}
+  .nav{display:flex;align-items:center;justify-content:space-between;height:64px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:18px}
+  .mark{width:28px;height:28px;border-radius:8px;background:var(--accent);position:relative;flex:none}
+  .mark::after{content:"";position:absolute;left:5px;right:5px;top:14px;height:2px;background:#fff;box-shadow:0 -5px 0 -0.5px #fff,0 5px 0 -0.5px #fff}
+  .nav a{font-size:14px;margin-left:20px;color:var(--muted)}
+  .hero{padding:72px 0 56px;text-align:center}
+  .pill{display:inline-block;background:var(--accent-soft);color:var(--accent);border-radius:999px;padding:5px 14px;font-size:13px;font-weight:600;margin-bottom:20px}
+  h1{font-size:clamp(34px,6vw,54px);line-height:1.15;margin:0 0 18px;letter-spacing:-.5px}
+  .lead{font-size:19px;color:var(--muted);max-width:680px;margin:0 auto 32px}
+  .btn{display:inline-flex;align-items:center;justify-content:center;padding:12px 22px;border-radius:8px;font-weight:600;font-size:15px;margin:0 6px 12px;border:1px solid transparent}
+  .btn-primary{background:var(--accent);color:#fff}
+  .btn-primary:hover{background:#09606f;text-decoration:none}
+  .btn-ghost{background:#fff;color:var(--ink);border-color:var(--line)}
+  .btn-ghost:hover{text-decoration:none;border-color:var(--accent)}
+  .note{font-size:13px;color:var(--muted);margin-top:6px}
+  section{padding:48px 0}
+  h2{font-size:28px;margin:0 0 8px;letter-spacing:-.3px}
+  .sub{color:var(--muted);margin:0 0 28px}
+  .shots{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:20px;align-items:start}
+  .shot{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;text-align:center}
+  .shot img{max-width:100%;border-radius:6px;display:block;margin:0 auto}
+  .shot p{margin:12px 0 0;font-size:14px;color:var(--muted)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:22px}
+  .card h3{margin:0 0 8px;font-size:17px}
+  .card p{margin:0;color:var(--muted);font-size:14px}
+  .num{display:inline-block;font-size:12px;font-weight:700;color:var(--accent);background:var(--accent-soft);border-radius:6px;padding:2px 8px;margin-bottom:12px}
+  table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:14px}
+  th,td{text-align:left;padding:12px 16px;border-bottom:1px solid var(--line)}
+  th{background:#f0f3f6;font-weight:600}
+  tr:last-child td{border-bottom:0}
+  code{background:#eef1f4;border-radius:4px;padding:2px 6px;font-size:13px}
+  pre{background:#1f2328;color:#e6edf3;border-radius:10px;padding:18px;overflow:auto;font-size:13px;line-height:1.6}
+  pre code{background:none;color:inherit;padding:0}
+  .privacy{background:var(--accent-soft);border-radius:12px;padding:26px 28px}
+  .privacy h2{margin-top:0}
+  footer{border-top:1px solid var(--line);padding:28px 0;color:var(--muted);font-size:13px;text-align:center}
+  @media(max-width:600px){.hero{padding:48px 0 36px}.nav a{margin-left:12px}}
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap nav">
+    <div class="brand"><span class="mark"></span>TrayMetrics</div>
+    <div><a href="#features">功能</a><a href="#metrics">指标</a><a href="#download">下载</a><a href="https://github.com/OWNER/REPO">GitHub</a></div>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="hero">
+    <div class="pill">Windows 10 / 11 · 开源 · 零遥测</div>
+    <h1>把系统状态，<br>放进一个托盘图标里</h1>
+    <p class="lead">网速、整机功率、CPU、内存、磁盘、温度、GPU——一次只显示一种，右键切换，左键看详情。纯本地运行，不联网、不上传任何数据。</p>
+    <a class="btn btn-primary" href="https://github.com/OWNER/REPO/releases/latest">下载最新版 exe</a>
+    <a class="btn btn-ghost" href="https://github.com/OWNER/REPO">查看源码</a>
+    <p class="note">免安装便携版与 NSIS 安装包均为 Windows x64；未做商业签名，首次运行 SmartScreen 选「仍要运行」。</p>
+  </div>
+
+  <section id="shots">
+    <h2>实际效果</h2>
+    <p class="sub">托盘图标用系统真实字体渲染数值，不是像素方块；详情面板左键即出。</p>
+    <div class="shots">
+      <div class="shot"><img src="icon-preview.png" alt="托盘图标放大预览"><p>托盘图标（放大预览）</p></div>
+      <div class="shot"><img src="screenshot-panel.png" alt="详情面板"><p>详情面板：大数字、走势图、数据来源</p></div>
+      <div class="shot"><img src="screenshot-list.png" alt="全部指标面板"><p>「全部指标」一屏看全</p></div>
+    </div>
+  </section>
+
+  <section id="features">
+    <h2>为什么用它</h2>
+    <p class="sub">为「只想随时瞄一眼」而做，不做常驻大窗口，也不装驱动。</p>
+    <div class="grid">
+      <div class="card"><span class="num">01</span><h3>托盘即仪表盘</h3><p>通知区一个小图标实时刷新当前指标，右键切类型，左键弹面板，不用时完全不占桌面。</p></div>
+      <div class="card"><span class="num">02</span><h3>整机功率实测优先</h3><p>RAPL / Windows Power Meter / nvidia-smi 实测优先，都没有才估算，并在电池供电后自动校准平台基线。</p></div>
+      <div class="card"><span class="num">03</span><h3>零原生依赖</h3><p>只用 Node + Electron，采集走系统自带命令与可选的 LibreHardwareMonitor，无需 .NET SDK、无需装驱动。</p></div>
+      <div class="card"><span class="num">04</span><h3>省内存</h3><p>字形图集一次性栅格化后销毁隐藏窗口，之后每秒纯 JS 贴图；面板关闭 60 秒后释放渲染进程。</p></div>
+      <div class="card"><span class="num">05</span><h3>自适应</h3><p>高 DPI 清晰显示，任务栏深浅色自动/浅色/深色三档，支持开机自启与单实例。</p></div>
+      <div class="card"><span class="num">06</span><h3>完全本地</h3><p>所有数据只在本地进程计算，不联网、不上传、无账号、无遥测。</p></div>
+    </div>
+  </section>
+
+  <section id="metrics">
+    <h2>支持的指标</h2>
+    <p class="sub">温度与 GPU 明细需要可选的 LibreHardwareMonitor 或 NVIDIA 驱动，其余指标开箱即用。</p>
+    <table>
+      <tr><th>类型</th><th>缩写</th><th>单位</th><th>数据来源</th></tr>
+      <tr><td>网速</td><td>NET</td><td>MB/s</td><td><code>netstat -e</code> 累计字节差分</td></tr>
+      <tr><td>整机功率</td><td>PWR</td><td>W</td><td>RAPL / Power Meter / nvidia-smi，否则估算</td></tr>
+      <tr><td>CPU</td><td>CPU</td><td>%</td><td><code>os.cpus()</code> 两次采样差分</td></tr>
+      <tr><td>内存</td><td>MEM</td><td>%</td><td><code>os.totalmem</code> / <code>os.freemem</code></td></tr>
+      <tr><td>磁盘</td><td>DSK</td><td>%</td><td><code>fs.statfsSync</code> / WMI</td></tr>
+      <tr><td>温度</td><td>TMP</td><td>°C</td><td>LibreHardwareMonitor :8085 / nvidia-smi</td></tr>
+      <tr><td>GPU</td><td>GPU</td><td>%</td><td>LibreHardwareMonitor / nvidia-smi</td></tr>
+    </table>
+  </section>
+
+  <section id="download">
+    <h2>下载与运行</h2>
+    <p class="sub">在 GitHub Releases 下载；也可以自己从源码构建，产物完全一致。</p>
+    <div class="grid">
+      <div class="card"><h3>免安装便携版</h3><p><code>TrayMetrics-1.0.0-Portable.exe</code>，双击即用，不写注册表，约 110MB。</p></div>
+      <div class="card"><h3>安装包</h3><p><code>TrayMetrics-1.0.0-Setup.exe</code>，带开始菜单、桌面快捷方式与卸载程序。</p></div>
+    </div>
+    <pre style="margin-top:20px"><code>git clone https://github.com/OWNER/REPO.git
+cd tray-metrics
+npm ci
+npm run dist        # 输出 dist/ 下的 Setup.exe 与 Portable.exe
+npm start           # 或直接源码启动</code></pre>
+  </section>
+
+  <section class="privacy">
+    <h2>隐私</h2>
+    <p style="margin:0">不联网、不上传任何数据、无账号体系、无遥测。唯一会访问网络的场景是你自己在设置里填了智能插座 / 功率计的 HTTP 地址，且请求只发往你填的局域网地址。</p>
+  </section>
+</div>
+
+<footer>MIT License · TrayMetrics · 基于 Electron 45 与 Node.js</footer>
+</body>
+</html>

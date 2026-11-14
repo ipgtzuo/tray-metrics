@@ -38,6 +38,23 @@ if (-not $RepoUrl.EndsWith('.git')) { $RepoUrl += '.git' }
 git rev-parse --is-inside-work-tree | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'Current directory is not a git repository.' }
 
+# Fill the real owner/repo into the GitHub Pages landing page, then commit it
+$m = [regex]::Match($RepoUrl, 'github\.com/([^/]+)/([^/]+?)(?:\.git)?$')
+if ($m.Success) {
+  $ownerRepo = $m.Groups[1].Value + '/' + $m.Groups[2].Value
+  $index = Join-Path $PSScriptRoot 'docs\index.html'
+  if (Test-Path $index) {
+    $text = [IO.File]::ReadAllText($index)
+    $filled = $text.Replace('OWNER/REPO', $ownerRepo)
+    if ($filled -ne $text) {
+      [IO.File]::WriteAllText($index, $filled, (New-Object Text.UTF8Encoding($false)))
+      git add docs/index.html | Out-Null
+      git commit -m 'Set GitHub repo links in landing page' | Out-Null
+      Write-Host "Landing page links set to: $ownerRepo"
+    }
+  }
+}
+
 git branch -M $Branch
 $existing = git remote get-url origin 2>$null
 if ($LASTEXITCODE -eq 0 -and $existing) {
@@ -54,5 +71,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $webUrl = $RepoUrl -replace '\.git$', ''
+$pagesUrl = $webUrl -replace 'https://github\.com/([^/]+)/(.+)$', 'https://$1.github.io/$2/'
 Write-Host "Pushed to: $webUrl"
+Write-Host "Enable Pages (main /docs) then visit: $pagesUrl"
 Write-Host "To publish the exe: git tag v1.0.0; git push origin v1.0.0 (triggers the GitHub Actions build + Release assets)"
