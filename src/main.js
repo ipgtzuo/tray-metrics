@@ -12,12 +12,14 @@ let welcomeShown = false, quitting = false;
 let platformBaseW = 12, wallPowerUrl = '';
 let lastIconKey = '', lastIconUrl = '';
 let idleTimer = null, pendingListMode = false, lastPanelH = 470, panelHSaveTimer = null;
-let panelShownAt = 0;                 // 面板最近一次 show 的时刻
+let panelShownAt = 0;                 // 面板「隐藏 → 显示」的时刻（仅用于诊断日志）
 let lastTrayClickAt = 0;              // 双击/连点去重：同一次操作只算一次
 const PANEL_IDLE_MS = 60000; // 面板隐藏后保留 60 秒，闲置则释放渲染进程
 const PANEL_W = 348, PANEL_MIN_H = 300, PANEL_MAX_H = 760; // 高度随内容自适应
-const TRAY_CLICK_DEBOUNCE_MS = 400;  // 双击时 click + double-click 会连着来，合并成一次
-const TRAY_TOGGLE_MS = 800;          // 面板稳定显示超过这个时长，再点托盘才是「收起」
+const TRAY_CLICK_DEBOUNCE_MS = 350;  // 双击的 click + double-click、以及连点合并成一次
+/* 注意：不要用「面板显示了多久」来决定能否再次点击。
+ * 旧版要求 age > 800ms 才允许收起，而 openPanel() 每次都把 panelShownAt
+ * 重置成当前时间，导致连点时计时被无限续期 —— 表现为「必须等好几秒再点才有反应」。 */
 const metrics = new Metrics();
 
 /* 可选诊断：TM_DIAG=1 时把托盘点击/窗口显示隐藏事件写进 userData，
@@ -190,7 +192,7 @@ function createPanel() {
    * 点托盘图标时 Windows 会先把焦点交给任务栏，面板刚 show 就失焦；用户切回聊天窗口
    * 打字也会失焦。实测这些 blur 在几百毫秒内反复出现，据此收起会让面板「闪一下就没了」，
    * 看起来就是「点了没反应」。关闭统一由 × / Esc / 再次点击托盘触发，行为可预期。 */
-  panel.on('blur', () => diag('blur age=' + (Date.now() - panelShownAt), '(ignored)'));
+  panel.on('blur', () => diag('blur age=' + (panelShownAt ? Date.now() - panelShownAt : 'n/a'), '(ignored)'));
   panel.on('close', e => { if (!quitting) { e.preventDefault(); hidePanel(); } });
   panel.on('closed', () => { diag('closed'); panel = null; });
 }
@@ -243,11 +245,12 @@ function openPanel(listMode = false, force = false) {
   // 首次点击才创建窗口；启动时没有 BrowserWindow，Electron 也不会拉起渲染/GPU 进程
   const created = !panel || panel.isDestroyed();
   if (created) createPanel();
-  if (panel.isVisible() && !force) { hidePanel(); return; }
+  const wasVisible = !created && panel.isVisible();
+  if (wasVisible && !force) { hidePanel(); return; }
   pendingListMode = listMode;
   // 只在新建窗口时定位。反复 show 同一窗口不重写几何，避免 DPI 舍入逐次累积
   if (created) positionPanel();
-  panelShownAt = Date.now();
+  if (!wasVisible) panelShownAt = Date.now(); // 已可见的幂等 show 不续期
   panel.show();
   panel.moveTop();                 // 提到最上层，避免被刚激活的窗口盖住
   panel.focus();
@@ -301,17 +304,18 @@ if (!app.requestSingleInstanceLock()) {
     menu = buildMenu();
 
     // 不设置常驻 contextMenu：右键时即时构建，避免每秒刷新菜单导致闪烁
-    /** 左键：把详情显示出来；面板已稳定显示时再点一次收起。
-     *  双击会同时发 click 和 double-click，连点也会连着发 click，所以先按时间合并，
-     *  否则第二次事件会把刚弹出的面板又关掉 —— 这正是「点了没反应」的老毛病。 */
+    /** 左键：一次有效点击 = 一次开关（隐藏→显示，显示→隐藏）。
+     *  唯一需要过滤的是「同一次物理操作」产生的重复事件：双击会连着发
+     *  click + double-click，连点也连着发 click。这类事件只在很短的窗口内
+     *  合并掉，且合并时**不刷新任何时间戳**，否则会形成计时棘轮。 */
     const onTrayClick = source => {
       const now = Date.now();
-      const alive = panel && !panel.isDestroyed();
-      diag('tray ' + source, 'vis=' + (alive ? panel.isVisible() : 'n/a'),
-        'age=' + (now - panelShownAt));
       if (now - lastTrayClickAt < TRAY_CLICK_DEBOUNCE_MS) return;
       lastTrayClickAt = now;
-      if (alive && panel.isVisible() && now - panelShownAt > TRAY_TOGGLE_MS) { hidePanel(); return; }
+      const visible = panel && !panel.isDestroyed() && panel.isVisible();
+      diag('tray ' + source, 'vis=' + visible,
+        'age=' + (panelShownAt ? now - panelShownAt : 'n/a'));
+      if (visible) { hidePanel(); return; }
       openPanel(false, true);
     };
     tray.on('click', () => onTrayClick('click'));
@@ -320,7 +324,10 @@ if (!app.requestSingleInstanceLock()) {
       menu = buildMenu();
       tray.popUpContextMenu(menu);
     });
-    tray.on('double-click', () => onTrayClick('double-click'));
+    // 双击事件一律忽略：Windows 有时会在两次相隔半秒的单击之后补发 double-click，
+    // 若让它参与开关，用户「点开 → 点关」会被重新打开。双击的两个 click 已由
+    // 去抖合并成一次，所以这里不需要也不应该再做任何事。
+    tray.on('double-click', () => diag('tray double-click (ignored)'));
 
     ipcMain.on('set-type', (_e, k) => setType(k));
     ipcMain.on('close-panel', () => hidePanel());
