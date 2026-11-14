@@ -35,7 +35,7 @@ jobs:
           node -e "console.log('electron:', require('electron/package.json').version)"
           ls -lh node_modules/electron/dist/electron.exe || true
           echo "=== building ==="
-          node ./node_modules/electron-builder/cli.js --win --x64 --config electron-builder.js
+          node ./node_modules/electron-builder/cli.js --win --x64 --config electron-builder.js --publish never
           echo "=== dist ==="
           ls -lh dist/*.exe
 
