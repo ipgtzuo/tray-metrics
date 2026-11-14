@@ -10,11 +10,26 @@ let tray = null, panel = null, menu = null;
 let current = 'net', taskbarTheme = 'auto', iconMode = 'compact';
 let welcomeShown = false, quitting = false;
 let platformBaseW = 12, wallPowerUrl = '';
-let lastIconKey = '', lastIconUrl = '', lastClickAt = 0;
+let lastIconKey = '', lastIconUrl = '';
 let idleTimer = null, pendingListMode = false, lastPanelH = 470, panelHSaveTimer = null;
+let panelShownAt = 0;                 // 面板最近一次 show 的时刻
+let lastTrayClickAt = 0;              // 双击/连点去重：同一次操作只算一次
 const PANEL_IDLE_MS = 60000; // 面板隐藏后保留 60 秒，闲置则释放渲染进程
 const PANEL_W = 348, PANEL_MIN_H = 300, PANEL_MAX_H = 760; // 高度随内容自适应
+const TRAY_CLICK_DEBOUNCE_MS = 400;  // 双击时 click + double-click 会连着来，合并成一次
+const TRAY_TOGGLE_MS = 800;          // 面板稳定显示超过这个时长，再点托盘才是「收起」
 const metrics = new Metrics();
+
+/* 可选诊断：TM_DIAG=1 时把托盘点击/窗口显示隐藏事件写进 userData，
+ * 用来定位「点了没反应」这类只在真实桌面环境出现的问题。默认关闭。 */
+const DIAG = !!process.env.TM_DIAG;
+function diag(...args) {
+  if (!DIAG) return;
+  try {
+    fs.appendFileSync(path.join(app.getPath('userData'), 'tm-click.log'),
+      new Date().toISOString().slice(11, 23) + ' ' + args.join(' ') + '\n');
+  } catch (_) {}
+}
 
 function loadConfig() {
   try {
@@ -68,7 +83,7 @@ function buildTrayImage() {
   const light = resolveLight();
   const px = trayPixelSize();
   const key = [current, value, light, iconMode, px].join('|');
-  if (!ready(px)) { prepare([px, px * 4]).catch(() => {}); return null; }
+  if (!ready(px)) { diag('glyph-not-ready px=' + px); prepare([px, px * 4]).catch(() => {}); return null; }
   if (key !== lastIconKey) {
     let made;
     try {
@@ -140,7 +155,7 @@ function buildMenu() {
       };
     }),
     { type: 'separator' },
-    { label: '显示全部指标', click: () => openPanel(true) },
+    { label: '显示全部指标', click: () => openPanel(true, true) },
     { label: '设置', submenu: settings },
     { type: 'separator' },
     { label: '退出', click: () => { quitting = true; app.quit(); } }
@@ -149,11 +164,17 @@ function buildMenu() {
 
 /* ---------------- 详情面板 ---------------- */
 function createPanel() {
+  diag('createPanel');
   panel = new BrowserWindow({
     width: PANEL_W, height: lastPanelH, show: false, frame: false, resizable: false,
     movable: false, minimizable: false, maximizable: false, fullscreenable: false,
-    skipTaskbar: true, alwaysOnTop: true, transparent: true, hasShadow: false,
-    backgroundColor: '#00000000',
+    skipTaskbar: true, alwaysOnTop: true,
+    /* 不用 transparent:true。本机（以及部分 Windows GPU/远程会话环境）下透明窗口
+     * 合成会失败：窗口创建了、did-finish-load 也成功，但整个窗口渲染成纯黑，
+     * 用户点托盘就像「什么都没弹出来」。改成不透明 + 与卡片一致的底色，
+     * 内容立刻可见，四角只是从透明变成同色，视觉几乎无损。 */
+    transparent: false, hasShadow: false,
+    backgroundColor: '#24242e',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true, nodeIntegration: false, sandbox: false
@@ -161,14 +182,17 @@ function createPanel() {
   });
   panel.setAlwaysOnTop(true, 'floating');
   // 首次创建时 loadFile 是异步的，页面就绪后再补推一次快照，避免空白面板
-  panel.webContents.once('did-finish-load', () => pushSnapshot(pendingListMode, true));
+  panel.webContents.once('did-finish-load', () => { diag('did-finish-load'); pushSnapshot(pendingListMode, true); });
+  panel.webContents.on('did-fail-load', (_e, code, desc) => diag('did-fail-load', code, desc));
+  panel.webContents.on('render-process-gone', (_e, d) => diag('render-process-gone', d && d.reason));
   panel.loadFile(path.join(__dirname, 'panel.html'));
-  panel.on('blur', () => {
-    if (process.env.TM_PANEL_DEBUG) return;           // 调试截图时不要自动收起
-    if (panel && !panel.webContents.isDevToolsOpened()) hidePanel();
-  });
+  /* 刻意不在这里用 blur 自动收起面板。
+   * 点托盘图标时 Windows 会先把焦点交给任务栏，面板刚 show 就失焦；用户切回聊天窗口
+   * 打字也会失焦。实测这些 blur 在几百毫秒内反复出现，据此收起会让面板「闪一下就没了」，
+   * 看起来就是「点了没反应」。关闭统一由 × / Esc / 再次点击托盘触发，行为可预期。 */
+  panel.on('blur', () => diag('blur age=' + (Date.now() - panelShownAt), '(ignored)'));
   panel.on('close', e => { if (!quitting) { e.preventDefault(); hidePanel(); } });
-  panel.on('closed', () => { panel = null; });
+  panel.on('closed', () => { diag('closed'); panel = null; });
 }
 function positionPanel() {
   if (!tray || !panel) return;
@@ -195,6 +219,7 @@ function pushSnapshot(listMode, force = false) {
 /** 隐藏而非销毁，短时间内再点开能立刻显示；闲置超时后彻底释放渲染进程 */
 function hidePanel() {
   if (!panel || panel.isDestroyed()) return;
+  diag('hidePanel');
   panel.hide();
   if (idleTimer) clearTimeout(idleTimer);
   idleTimer = setTimeout(() => {
@@ -204,15 +229,25 @@ function hidePanel() {
   }, PANEL_IDLE_MS);
 }
 function openPanel(listMode = false, force = false) {
+  diag('openPanel', 'listMode=' + listMode, 'force=' + force,
+    'exists=' + !!(panel && !panel.isDestroyed()),
+    'vis=' + (panel && !panel.isDestroyed() ? panel.isVisible() : 'n/a'));
   if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
   // 首次点击才创建窗口；启动时没有 BrowserWindow，Electron 也不会拉起渲染/GPU 进程
   if (!panel || panel.isDestroyed()) createPanel();
   if (panel.isVisible() && !force) { hidePanel(); return; }
   pendingListMode = listMode;
   positionPanel();
+  panelShownAt = Date.now();
   panel.show();
+  panel.moveTop();                 // 提到最上层，避免被刚激活的窗口盖住
   panel.focus();
+  // Windows 前台锁定可能让第一次 focus 失败，稍后再试一次（不改变窗口位置）
+  setTimeout(() => {
+    if (panel && !panel.isDestroyed() && panel.isVisible()) panel.focus();
+  }, 120);
   pushSnapshot(listMode, true);
+  diag('shown vis=' + panel.isVisible());
 }
 function setType(k) {
   if (!KEYS.includes(k)) return;
@@ -226,7 +261,7 @@ function setType(k) {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => openPanel(false, true));
+  app.on('second-instance', () => { diag('second-instance'); openPanel(false, true); });
 
   app.whenReady().then(async () => {
     loadConfig();
@@ -257,17 +292,26 @@ if (!app.requestSingleInstanceLock()) {
     menu = buildMenu();
 
     // 不设置常驻 contextMenu：右键时即时构建，避免每秒刷新菜单导致闪烁
-    tray.on('click', () => {
+    /** 左键：把详情显示出来；面板已稳定显示时再点一次收起。
+     *  双击会同时发 click 和 double-click，连点也会连着发 click，所以先按时间合并，
+     *  否则第二次事件会把刚弹出的面板又关掉 —— 这正是「点了没反应」的老毛病。 */
+    const onTrayClick = source => {
       const now = Date.now();
-      if (now - lastClickAt < 260) return; // 双击时只响应一次
-      lastClickAt = now;
-      openPanel(false);
-    });
+      const alive = panel && !panel.isDestroyed();
+      diag('tray ' + source, 'vis=' + (alive ? panel.isVisible() : 'n/a'),
+        'age=' + (now - panelShownAt));
+      if (now - lastTrayClickAt < TRAY_CLICK_DEBOUNCE_MS) return;
+      lastTrayClickAt = now;
+      if (alive && panel.isVisible() && now - panelShownAt > TRAY_TOGGLE_MS) { hidePanel(); return; }
+      openPanel(false, true);
+    };
+    tray.on('click', () => onTrayClick('click'));
     tray.on('right-click', () => {
+      diag('tray right-click');
       menu = buildMenu();
       tray.popUpContextMenu(menu);
     });
-    tray.on('double-click', () => openPanel(false, true));
+    tray.on('double-click', () => onTrayClick('double-click'));
 
     ipcMain.on('set-type', (_e, k) => setType(k));
     ipcMain.on('close-panel', () => hidePanel());
@@ -322,7 +366,7 @@ if (!app.requestSingleInstanceLock()) {
           fs.writeFileSync(path.join(root, 'live-panel.png'), img.toPNG());
           fs.writeFileSync(path.join(root, 'live-panel.json'),
             JSON.stringify({ bounds: panel.getBounds(), png: img.getSize() }, null, 1));
-        } catch (e) { /* 调试截图失败不影响运行 */ }
+        } catch (e) { console.error('[panel-debug] capturePage 失败:', e && e.message); }
       }, 5200);
     }
 

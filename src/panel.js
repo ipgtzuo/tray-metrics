@@ -93,4 +93,5 @@ $('listView').addEventListener('click', e => {
 });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') window.api.close(); });
 document.addEventListener('contextmenu', e => e.preventDefault());
-window.api.request(false);
+// 只请求一份快照，不要覆盖主进程指定的视图状态（例如右键「显示全部指标」打开列表页）
+window.api.request();
