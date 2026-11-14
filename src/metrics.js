@@ -4,8 +4,13 @@
  * 设计原则：每路数据源独立探测、独立降级。
  *   - 纯 Node 主路径（os / fs.statfs / netstat / nvidia-smi）：零依赖，2 秒刷新，无常驻进程
  *   - PowerShell 增强（WMI 慢变量）：每 10 秒启动一次短命进程，取完数据立即退出，不常驻内存
+ *   - typeperf（Windows 原生 PDH）：RAPL 功耗、CPU 实际频率、Power Meter，无需管理员
  *   - LibreHardwareMonitor HTTP :8085：CPU 温度 / 风扇 / 封装功耗（可选）
+ *   - Lenovo Legion WMI：温度 / 风扇 / 功耗墙（可选，需管理员；参考 LLT 的接口定义）
  * 任一路失败只让对应指标显示「—」，不影响其它指标刷新。
+ *
+ * 参考：BartoszCichecki/LenovoLegionToolkit（GPL-3.0）。此处只使用其公开的
+ * 系统接口事实（root\WMI 类名、CapabilityID 数值、PDH 计数器名），未复制其代码。
  */
 const { EventEmitter } = require('events');
 const { spawn, execFile } = require('child_process');
@@ -22,16 +27,16 @@ const MB = 1024 * 1024, GB = 1024 * 1024 * 1024;
 const TYPES = {
   net:   { name: '网速', abbr: 'NET', color: '#7fb3ff', unit: 'MB/s', source: 'netstat -e · 累计字节时间戳差分' },
   power: { name: '整机功率', abbr: 'PWR', color: '#5dcaa5', unit: 'W', source: 'RAPL / Power Meter / nvidia-smi · 实测优先' },
-  cpu:   { name: 'CPU',  abbr: 'CPU', color: '#a78bfa', unit: '%',    source: 'os.cpus() · 两次采样差分' },
+  cpu:   { name: 'CPU',  abbr: 'CPU', color: '#a78bfa', unit: '%',    source: 'os.cpus() 差分 · PDH 实际频率' },
   mem:   { name: '内存', abbr: 'MEM', color: '#1d9e75', unit: '%',    source: 'os.totalmem / os.freemem · 2 秒刷新' },
   disk:  { name: '磁盘', abbr: 'DSK', color: '#ef9f27', unit: '%',    source: 'fs.statfs / WMI · 占用 2 秒 / 速率 10 秒' },
-  temp:  { name: '温度', abbr: 'TMP', color: '#f0784a', unit: '°C',   source: 'LHM :8085 / nvidia-smi' },
+  temp:  { name: '温度', abbr: 'TMP', color: '#f0784a', unit: '°C',   source: 'LHM :8085 / Legion WMI / nvidia-smi' },
   gpu:   { name: 'GPU',  abbr: 'GPU', color: '#d4537e', unit: '%',    source: 'LHM GPU Core / nvidia-smi' }
 };
 const KEYS = Object.keys(TYPES);
 
 const NA = {
-  temp:  '未读到任何温度：启动 LibreHardwareMonitor 并开启 Web Server (8085)，或确认 NVIDIA 驱动可用',
+  temp:  '未读到任何温度：启动 LibreHardwareMonitor 并开启 Web Server (8085)、确认 NVIDIA 驱动可用；联想 Legion 机型以管理员运行本程序可直接读 BIOS 传感器',
   gpu:   '未读到 GPU 数据：需 LHM 或 nvidia-smi',
   power: '未读到功耗数据：需 Windows Energy Meter (Intel RAPL) 或 NVIDIA 驱动；墙插功率需智能插座',
   net:   '未读到网卡统计：netstat 与 WMI 均不可用',
@@ -63,22 +68,28 @@ class Metrics extends EventEmitter {
   constructor() {
     super();
     this.hist = {}; KEYS.forEach(k => this.hist[k] = []);
-    this.availability = { lhm: false, nvidia: false, wmi: false, netstat: false, net: false, rapl: false, wall: false };
+    this.availability = { lhm: false, nvidia: false, wmi: false, netstat: false, net: false,
+                          rapl: false, wall: false, pdhFreq: false, lenovo: false };
     this.s = {
       netDownMB: null, netUpMB: null, netAdapter: null, sessionGB: 0, netSource: null,
       powerW: null, powerLabel: '—', cpuPkgW: null, gpuW: null,
-      raplPkgW: null, batteryWholeW: null, wallW: null, onBattery: false, powerOnline: null,
+      raplPkgW: null, raplPP0W: null, raplDRAMW: null,
+      batteryWholeW: null, wallW: null, onBattery: false, powerOnline: null,
       platformBaseW: 12, sysPowerMeasured: false,
-      cpuPct: null, cpuMHz: null, cpuCores: os.cpus().length,
+      cpuPct: null, cpuMHz: null, cpuActualMHz: null, cpuBaseMHz: null, cpuCores: os.cpus().length,
       memPct: null, memUsedGB: null, memFreeGB: null, memTotalGB: null,
       diskPct: null, diskTotalGB: null, diskReadMB: null, diskWriteMB: null, diskTempC: null,
-      tempC: null, gpuTempC: null, fanRpm: null, gpuPct: null, gpuMemGB: null,
-      batteryW: null, batteryPct: null,
+      tempC: null, gpuTempC: null, fanRpm: null, gpuFanRpm: null, gpuPct: null, gpuMemGB: null,
+      batteryW: null, batteryPct: null, batteryState: null, chargeW: null, batteryWh: null,
+      cpuPL1W: null, gpuTgpW: null,
       lightTaskbar: null   // null = WMI 未提供，由主进程用系统主题推断
     };
     // GPU 数据分离存放：LHM 与 nvidia-smi 各一路，互不覆盖、互不清空
     this.srcLhm = { temp: null, gpuTemp: null, gpuLoad: null, gpuW: null, cpuPkgW: null, fan: null, diskTemp: null };
     this.srcNv = { gpuTemp: null, gpuLoad: null, gpuMemGB: null, gpuW: null };
+    // 联想 Legion 专有 WMI：需要管理员权限，探测失败后不再重试，避免每 10 秒抛一次访问拒绝
+    this.srcLenovo = { cpuTemp: null, gpuTemp: null, cpuFan: null, gpuFan: null, pl1: null, tgp: null };
+    this.lenovoProbe = { tried: false, ok: false };
 
     // WMI 短命采集状态：this.ps 非空表示当前有一轮正在执行
     this.ps = null; this.lastPsAt = 0; this._psScript = null; this._stopped = false;
@@ -122,6 +133,8 @@ class Metrics extends EventEmitter {
   /** 菜单里的「重新检测传感器」：立刻补跑一轮 WMI，不用等下个 10 秒 */
   refreshSensors() {
     this.lhmFails = 0;
+    // 用户可能刚以管理员权限重启，给联想 WMI 一次重新探测的机会
+    if (!this.lenovoProbe.ok) this.lenovoProbe.tried = false;
     this._pollLHM();
     this._probeNvidia(true);
     this._samplePower();
@@ -189,12 +202,22 @@ class Metrics extends EventEmitter {
 
   /**
    * typeperf 是 Windows 自带的轻量 PDH 工具（无常驻进程、不需要管理员、不需要 LHM）。
-   * \Energy Meter(RAPL_Package0_PKG)\Power = Intel RAPL 的 CPU 封装实测功耗（mW）
-   * \Power Meter(Power Meter (0))\Power   = 电池供电时的整机实测功耗（mW），接 AC 时为 0
+   * 实测：typeperf 会静默忽略本机不存在的计数器，只返回有效列，所以把多组计数器
+   * 合并成一次调用即可，某个计数器缺失不会拖垮整轮采集（借鉴 LLT 的 SafePerformanceCounter）。
+   *   \Energy Meter(RAPL_Package0_PKG)\Power  = CPU 封装实测功耗 (mW)
+   *   \Energy Meter(RAPL_Package0_PP0)\Power  = CPU 核心 (mW)，封装的子集
+   *   \Energy Meter(RAPL_Package0_DRAM)\Power = 内存 (mW)
+   *   \Power Meter(Power Meter (0))\Power    = 电池供电时整机实测 (mW)，接 AC 时常为 0
+   *   \Processor Information(_Total)\Actual Frequency             = CPU 真实睿频 (MHz)
+   *   \Processor Information(_Total)\% Processor Performance      = 睿频倍率（频率回退）
+   * Win32_Processor.CurrentClockSpeed 在 Win10/11 上基本恒等于基频（本机 i9-14900HX
+   * 恒为 2200MHz），不能当「当前频率」显示。
    */
   _samplePower() {
     execFile('typeperf',
-      ['\\Energy Meter(*)\\Power', '\\Power Meter(*)\\Power', '-sc', '1'],
+      ['\\Energy Meter(*)\\Power', '\\Power Meter(*)\\Power',
+       '\\Processor Information(_Total)\\Actual Frequency',
+       '\\Processor Information(_Total)\\% Processor Performance', '-sc', '1'],
       { windowsHide: true, timeout: 6000, encoding: 'buffer', maxBuffer: 256 * 1024 },
       (err, stdout) => {
         if (err || !stdout) { this.availability.rapl = false; this._pollWall(); return; }
@@ -205,17 +228,33 @@ class Metrics extends EventEmitter {
         if (!head || !data) { this.availability.rapl = false; this._pollWall(); return; }
         const cols = head.split(',').map(x => x.replace(/^"|"$/g, '').trim());
         const vals = data.split(',').map(x => x.replace(/^"|"$/g, '').trim());
-        let pkgMW = null, pmMW = null;
+        let pkgMW = null, pmMW = null, pp0MW = null, dramMW = null, freqMHz = null, perfPct = null;
         cols.forEach((c, i) => {
           const v = parseFloat(vals[i]);
           if (!Number.isFinite(v) || v <= 0) return;
           if (c.includes('RAPL_Package0_PKG') && c.endsWith('\\Power')) pkgMW = v;
+          else if (c.includes('RAPL_Package0_PP0') && c.endsWith('\\Power')) pp0MW = v;
+          else if (c.includes('RAPL_Package0_DRAM') && c.endsWith('\\Power')) dramMW = v;
           else if (c.includes('Power Meter(') && c.endsWith('\\Power')) pmMW = Math.max(pmMW || 0, v);
+          else if (c.includes('Processor Information(_Total)') && c.endsWith('\\Actual Frequency')) freqMHz = v;
+          else if (c.includes('Processor Information(_Total)') && c.endsWith('\\% Processor Performance')) perfPct = v;
         });
         this.s.raplPkgW = pkgMW !== null ? pkgMW / 1000 : null;
+        this.s.raplPP0W = pp0MW !== null ? pp0MW / 1000 : null;
+        this.s.raplDRAMW = dramMW !== null ? dramMW / 1000 : null;
         this.availability.rapl = pkgMW !== null;
         this.s.batteryWholeW = pmMW !== null ? pmMW / 1000 : null;
         this.s.onBattery = pmMW !== null;
+
+        // 睿频：直接读 Actual Frequency；老系统没有该计数器时用倍率 × 基频回退
+        // （LLT 就是用 % Processor Performance × CallNtPowerInformation 的 MaxMhz）
+        const base = this.s.cpuBaseMHz || this.s.cpuMHz;
+        const mhz = freqMHz ?? (perfPct !== null && base ? base * perfPct / 100 : null);
+        if (mhz > 100 && mhz < 20000) {
+          this.s.cpuActualMHz = mhz;
+          this.s.cpuMHz = mhz;
+          this.availability.pdhFreq = true;
+        }
         this._resolvePower();
         this._pollWall();
       });
@@ -262,12 +301,17 @@ class Metrics extends EventEmitter {
 
     // 活动网卡名每 6 轮（约 60 秒）查一次；其余轮次让脚本跳过最贵的模块加载
     const needAdapter = this.psRuns % 6 === 0 || !this.s.netAdapter;
+    // 联想专有 WMI 只探测一次：失败（通常是没以管理员运行）后永久关闭，
+    // 避免每 10 秒重复触发一次「拒绝访问」。
+    const tryLenovo = !this.lenovoProbe.tried || this.lenovoProbe.ok;
     let child;
     try {
       child = spawn('powershell.exe',
         ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
         { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
-          env: { ...process.env, TM_SKIP_ADAPTER: needAdapter ? '0' : '1' } });
+          env: { ...process.env,
+            TM_SKIP_ADAPTER: needAdapter ? '0' : '1',
+            TM_TRY_LENOVO: tryLenovo ? '1' : '0' } });
     } catch (e) {
       this.emit('error', new Error('PowerShell 启动失败: ' + e.message));
       return;
@@ -332,13 +376,34 @@ class Metrics extends EventEmitter {
     if (typeof d.diskTotalGB === 'number') s.diskTotalGB = d.diskTotalGB;
     if (typeof d.diskReadMB === 'number') s.diskReadMB = d.diskReadMB;
     if (typeof d.diskWriteMB === 'number') s.diskWriteMB = d.diskWriteMB;
-    if (typeof d.cpuMHz === 'number' && d.cpuMHz > 0) s.cpuMHz = d.cpuMHz;
-    if (typeof d.batteryW === 'number') {
-      s.batteryW = d.batteryW;
-      s.batteryPct = d.batteryPct ?? null;
+    if (typeof d.cpuMHz === 'number' && d.cpuMHz > 0) {
+      s.cpuBaseMHz = d.cpuMHz;                 // WMI 只读到基频，留作倍率回退的基准
+      if (!s.cpuActualMHz) s.cpuMHz = d.cpuMHz; // PDH 实测睿频优先
     }
+    if (typeof d.batteryW === 'number') s.batteryW = d.batteryW;
+    if (typeof d.batteryPct === 'number') s.batteryPct = d.batteryPct;
+    if (typeof d.chargeW === 'number') s.chargeW = d.chargeW;
+    if (typeof d.batteryWh === 'number') s.batteryWh = d.batteryWh;
+    if (typeof d.batteryState === 'string') s.batteryState = d.batteryState;
     if (typeof d.powerOnline === 'boolean') s.powerOnline = d.powerOnline;
     if (typeof d.lightTaskbar === 'boolean') s.lightTaskbar = d.lightTaskbar;
+
+    // 联想 Legion 专有 WMI（需管理员）：接口与 CapabilityID 来自 LLT 的公开定义。
+    // 探测一次，无权限就永久跳过，不影响其它任何指标。
+    if (!this.lenovoProbe.tried || this.lenovoProbe.ok) {
+      this.lenovoProbe.tried = true;
+      const V = this.srcLenovo;
+      V.cpuTemp = typeof d.lnv_cpuTempC === 'number' ? d.lnv_cpuTempC : null;
+      V.gpuTemp = typeof d.lnv_gpuTempC === 'number' ? d.lnv_gpuTempC : null;
+      V.cpuFan  = typeof d.lnv_cpuFanRpm === 'number' ? d.lnv_cpuFanRpm : null;
+      V.gpuFan  = typeof d.lnv_gpuFanRpm === 'number' ? d.lnv_gpuFanRpm : null;
+      V.pl1     = typeof d.lnv_cpuPL1W === 'number' ? d.lnv_cpuPL1W : null;
+      V.tgp     = typeof d.lnv_gpuTgpW === 'number' ? d.lnv_gpuTgpW : null;
+      this.lenovoProbe.ok = V.cpuTemp !== null || V.gpuTemp !== null || V.cpuFan !== null;
+      this.availability.lenovo = this.lenovoProbe.ok;
+      s.cpuPL1W = V.pl1; s.gpuTgpW = V.tgp;
+      this._mergeSensors();
+    }
 
     this._resolvePower();
   }
@@ -390,17 +455,18 @@ class Metrics extends EventEmitter {
       });
   }
 
-  /** 多路传感器合并：LHM 优先，nvidia-smi 回退 */
+  /** 多路传感器合并：LHM > Legion WMI > nvidia-smi，逐项独立回退 */
   _mergeSensors() {
-    const L = this.srcLhm, N = this.srcNv, s = this.s;
-    s.tempC = L.temp;
-    s.gpuTempC = L.gpuTemp ?? N.gpuTemp;
+    const L = this.srcLhm, V = this.srcLenovo, N = this.srcNv, s = this.s;
+    s.tempC = L.temp ?? V.cpuTemp;
+    s.gpuTempC = L.gpuTemp ?? V.gpuTemp ?? N.gpuTemp;
     s.diskTempC = L.diskTemp;
     s.gpuPct = L.gpuLoad ?? N.gpuLoad;
     s.gpuMemGB = N.gpuMemGB;
     s.gpuW = L.gpuW ?? N.gpuW;
     s.cpuPkgW = L.cpuPkgW ?? s.raplPkgW;   // LHM 优先，否则用 Windows RAPL 实测
-    s.fanRpm = L.fan;
+    s.fanRpm = L.fan ?? V.cpuFan;
+    s.gpuFanRpm = V.gpuFan;
     this._resolvePower();
   }
 
@@ -496,12 +562,14 @@ class Metrics extends EventEmitter {
     switch (key) {
       case 'net':   return '下行 · ' + (s.netAdapter || '全接口合计') + ' · netstat 差分';
       case 'power': return s.powerLabel;
-      case 'cpu':   return s.cpuCores + ' 逻辑核 · ' + (s.cpuMHz ? (s.cpuMHz / 1000).toFixed(1) + ' GHz' : '频率未知');
+      case 'cpu':   return s.cpuCores + ' 逻辑核 · ' +
+        (s.cpuMHz ? (s.cpuMHz / 1000).toFixed(2) + ' GHz ' + (s.cpuActualMHz ? '睿频实测' : '基频') : '频率未知');
       case 'mem':   return s.memUsedGB !== null ? s.memUsedGB.toFixed(1) + ' / ' + s.memTotalGB.toFixed(1) + ' GB' : '—';
       case 'disk':  return 'C: · ' + (s.diskTotalGB ? s.diskTotalGB.toFixed(0) + ' GB' : '容量未知');
       case 'temp':  return s.tempC !== null
-        ? 'CPU 封装' + (s.fanRpm ? ' · 风扇 ' + Math.round(s.fanRpm) + ' RPM' : '')
-        : (s.gpuTempC !== null ? 'GPU 核心温度（nvidia-smi）' : '—');
+        ? 'CPU 封装' + (s.fanRpm ? ' · 风扇 ' + Math.round(s.fanRpm) + ' RPM' : '') +
+          (this.srcLhm.temp === null && this.availability.lenovo ? ' · Legion WMI' : '')
+        : (s.gpuTempC !== null ? 'GPU 核心温度' : '—');
       case 'gpu':   return s.gpuTempC !== null ? '核心温度 ' + Math.round(s.gpuTempC) + ' °C' : 'GPU';
       default: return '';
     }
@@ -519,7 +587,9 @@ class Metrics extends EventEmitter {
       ];
       case 'power': return [
         ['整机总功率', s.powerW === null ? null : f1(s.powerW) + ' W · ' + (s.sysPowerMeasured ? '实测' : '估算')],
-        ['CPU 封装', s.cpuPkgW === null ? null : f1(s.cpuPkgW) + ' W · RAPL'],
+        ['CPU 封装 · PKG', s.cpuPkgW === null ? null : f1(s.cpuPkgW) + ' W · RAPL'],
+        ['其中核心 / 内存', (s.raplPP0W === null ? '—' : f1(s.raplPP0W) + ' W') + ' / ' +
+          (s.raplDRAMW === null ? '—' : f1(s.raplDRAMW) + ' W')],
         ['GPU 功耗', s.gpuW === null ? null : f1(s.gpuW) + ' W · NV'],
         ['平台基线', f1(s.platformBaseW) + ' W · 其余部件']
       ];
@@ -527,7 +597,7 @@ class Metrics extends EventEmitter {
         ['当前占用', r0(s.cpuPct) === null ? null : r0(s.cpuPct) + ' %'],
         ['当前频率', s.cpuMHz === null ? null : (s.cpuMHz / 1000).toFixed(2) + ' GHz'],
         ['逻辑处理器', String(s.cpuCores) + ' 核'],
-        ['数据来源', 'os.cpus() 差分']
+        ['数据来源', 'os.cpus() 差分 · ' + (s.cpuActualMHz ? 'PDH 实际频率' : 'WMI 基频')]
       ];
       case 'mem': return [
         ['已用', s.memUsedGB === null ? null : s.memUsedGB.toFixed(1) + ' GB'],
@@ -545,7 +615,8 @@ class Metrics extends EventEmitter {
         ['CPU 封装', r0(s.tempC) === null ? null : r0(s.tempC) + ' °C'],
         ['GPU 核心', r0(s.gpuTempC) === null ? null : r0(s.gpuTempC) + ' °C'],
         ['固态硬盘', r0(s.diskTempC) === null ? null : r0(s.diskTempC) + ' °C'],
-        ['CPU 风扇', r0(s.fanRpm) === null ? null : r0(s.fanRpm) + ' RPM']
+        ['CPU 风扇', r0(s.fanRpm) === null ? null : r0(s.fanRpm) + ' RPM'],
+        ['GPU 风扇', r0(s.gpuFanRpm) === null ? null : r0(s.gpuFanRpm) + ' RPM']
       ];
       case 'gpu': return [
         ['核心占用', r0(s.gpuPct) === null ? null : r0(s.gpuPct) + ' %'],
@@ -561,13 +632,25 @@ class Metrics extends EventEmitter {
     const s = this.s;
     if (this.value(key) === null) return NA[key] || null;
     if (key === 'temp' && s.tempC === null && s.gpuTempC !== null)
-      return '当前显示 GPU 核心温度；CPU / 硬盘 / 风扇需 LHM 开启 Web Server (8085)';
+      return '当前显示 GPU 核心温度；CPU / 硬盘 / 风扇需 LHM 开启 Web Server (8085)，或以管理员运行让 Legion WMI 生效。';
     if (key === 'power') {
       if (s.powerLabel.startsWith('墙插实测')) return '外接电表 AC 侧实测，已含电源适配器损耗。';
       if (s.powerLabel.startsWith('整机实测')) return '电池供电 · Windows Power Meter 整机 DC 实测，已据此校准平台基线。';
+      const bits = [];
+      if (s.raplPP0W !== null) bits.push('CPU 核心 ' + s.raplPP0W.toFixed(1) + ' W');
+      if (s.raplDRAMW) bits.push('内存 ' + s.raplDRAMW.toFixed(1) + ' W');
+      if (s.cpuPL1W) bits.push('PL1 功耗墙 ' + s.cpuPL1W + ' W');
+      if (s.gpuTgpW) bits.push('GPU TGP ' + s.gpuTgpW + ' W');
+      const batt = s.batteryState === 'charging' ? '，电池充电中'
+        : s.batteryState === 'discharging' ? '，电池放电中' : '，接 AC 且电池未放电';
       return '估算 = CPU 封装 + GPU + 平台基线 ' + s.platformBaseW.toFixed(1) +
-        ' W（屏幕/内存/主板/风扇）。墙插 AC 功率需智能插座：在 config.json 配 wallPowerUrl 即可接入。';
+        ' W（屏幕/内存/主板/风扇）' + batt + '。' +
+        (bits.length ? 'RAPL / BIOS 分项：' + bits.join(' · ') + '。' : '') +
+        '墙插 AC 功率需智能插座：在 config.json 配 wallPowerUrl 即可接入。';
     }
+    if (key === 'cpu' && s.cpuActualMHz)
+      return '占用率来自 os.cpus() 两次采样差分；频率用 Windows PDH「Actual Frequency」计数器，能反映真实睿频。' +
+        (s.cpuBaseMHz ? 'WMI 的 CurrentClockSpeed 在本机恒为基频 ' + (s.cpuBaseMHz / 1000).toFixed(2) + ' GHz，已不用于展示。' : '');
     if (key === 'net' && s.netSource === 'netstat')
       return 'netstat -e 累计字节按真实时间戳差分（2 秒刷新）；虚拟网卡 / VPN 开启时可能偏高';
     if (key === 'disk')

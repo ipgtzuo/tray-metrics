@@ -22,7 +22,9 @@
 
 - **托盘即仪表盘**：任务栏通知区一个小图标，实时刷新当前指标的数值（用系统真实字体渲染，不是像素方块）。
 - **七类指标，一键切换**：网速、整机功率、CPU、内存、磁盘、温度、GPU，右键菜单任意切换；也可在面板里点「全部指标」同时查看。
-- **整机功率实测优先**：优先用 Intel/AMD 的 RAPL（`Energy Meter` / `Package` 计数器，Windows 自带 `typeperf` 读取，无需管理员、无需第三方软件）、电池供电时的 Windows Power Meter（整机 DC 实测）、NVIDIA `nvidia-smi`；都没有时再用「CPU 封装 + GPU + 平台基线」估算，并在一次电池供电后自动校准基线。
+- **整机功率实测优先**：优先用 Intel/AMD 的 RAPL（`Energy Meter` / `Package` 计数器，Windows 自带 `typeperf` 读取，无需管理员、无需第三方软件）、电池供电时的 Windows Power Meter（整机 DC 实测）、NVIDIA `nvidia-smi`；都没有时再用「CPU 封装 + GPU + 平台基线」估算，并在一次电池供电后自动校准基线。面板还会拆出 RAPL 封装里的 CPU 核心 / 内存分项。
+- **CPU 频率是真实睿频**：读 Windows PDH 的 `Actual Frequency` 计数器。`Win32_Processor.CurrentClockSpeed` 在 Win10/11 上常恒等于标称基频（实测 i9-14900HX 恒为 2.20 GHz），不能当「当前频率」用。
+- **联想 Legion 机型可直读 BIOS 传感器**：以管理员运行时，通过 `root\WMI` 的 `LENOVO_OTHER_METHOD` 读 CPU/GPU 温度、双风扇转速和 PL1/TGP 功耗墙，**无需安装 LibreHardwareMonitor**。普通权限会返回「拒绝访问」，程序自动跳过且不再重试，不影响其它指标。
 - **详情面板**：左键图标弹出，含大数字、迷你走势图、各项明细、数据来源说明；面板高度随内容自适应，关掉即释放渲染进程（空闲常驻内存约 130MB）。
 - **零原生依赖**：只用 Node + Electron，所有采集走 `os` / `netstat` / `WMI`（PowerShell 短命调用）/ `typeperf` / `nvidia-smi` / 可选的 LibreHardwareMonitor（`:8085`）。无需 .NET SDK，无需装驱动。
 - **开机自启 & 任务栏深浅色自适应**：支持「自动 / 浅色 / 深色」三档，跟随或固定任务栏配色。
@@ -34,13 +36,13 @@
 | ---- | --- | ---- | ------------------------------------------- |
 | 网速   | NET | MB/s | `netstat -e` 累计字节按真实时间戳差分（2s）               |
 | 整机功率 | PWR | W    | RAPL / Power Meter / nvidia-smi（实测优先，否则估算）  |
-| CPU  | CPU | %    | `os.cpus()` 两次采样差分                          |
+| CPU  | CPU | %    | `os.cpus()` 差分（占用）+ PDH `Actual Frequency`（频率） |
 | 内存   | MEM | %    | `os.totalmem` / `os.freemem`（2s）            |
 | 磁盘   | DSK | %    | `fs.statfsSync` / WMI（占用 2s，读写速率 10s）       |
-| 温度   | TMP | °C   | LibreHardwareMonitor `:8085` / `nvidia-smi` |
+| 温度   | TMP | °C   | LHM `:8085` / Legion WMI（需管理员）/ `nvidia-smi` |
 | GPU  | GPU | %    | LibreHardwareMonitor GPU / `nvidia-smi`     |
 
-> **关于温度与 GPU 明细**：CPU/硬盘/风扇温度、GPU 核心温度需要 LibreHardwareMonitor（LHM）开启 Web Server（端口 8085）。LHM 是可选增强，不装也能用，只是少了温度来源。网速、功率、CPU、内存、磁盘均无需任何第三方软件。
+> **关于温度与 GPU 明细**：CPU/硬盘/风扇温度、GPU 核心温度通常依赖 LibreHardwareMonitor（LHM）开启 Web Server（端口 8085）。联想 Legion 机型若**以管理员运行本程序**，可直接从 BIOS WMI 读 CPU/GPU 温度与双风扇转速，不必装 LHM。LHM 与提权都是可选增强；网速、功率、CPU、内存、磁盘均无需任何第三方软件或特殊权限。
 
 ## 快速开始
 
@@ -101,7 +103,7 @@ npm start
 
 - **框架**：Electron 45.2.3（主进程管托盘/菜单/窗口，渲染进程只负责详情面板）。
 - **真实字体托盘图标**：图标每秒在主进程重绘，为了省内存不常驻渲染进程。启动时用一个隐藏窗口把所需字符（数字、`.`、`-`、字母）按系统字体（Segoe UI）栅格化成字形图集，取回后立即销毁窗口；之后每帧纯 JS 贴图合成，获得清晰抗锯齿文字而非像素方块。
-- **采集分层降级**：主路径纯 Node（`os` / `fs`）；慢变量用短命 PowerShell 调用（约 10s 一次、8s 超时）；功率用 `typeperf` 读 RAPL；GPU/温度用 `nvidia-smi`；LHM 为可选 HTTP 数据源。
+- **采集分层降级**：主路径纯 Node（`os` / `fs` / `netstat`）；慢变量用短命 PowerShell 调用（约 10s 一次、8s 超时）；`typeperf` 一次读取 RAPL 功耗、CPU 实际频率、Power Meter（实测：本机不存在的计数器会被静默忽略，代码按列名逐项容错）；GPU/温度用 `nvidia-smi`；LHM 为可选 HTTP 数据源；联想 WMI 为可选的管理员数据源。任一路失败只影响对应字段。
 - **DPI 处理**：托盘位图物理尺寸 = 16 逻辑像素 × 显示缩放（150% 下为 24px），声明为 1× 表示避免被系统二次放大发虚。
 - **打包**：`electron-builder` 一次构建产出 NSIS + portable；`electronDist` 复用本地已安装的 Electron 运行时避免联网重下；无证书时用 no-op 签名回调跳过 Authenticode。GitHub Actions 工作流会在打 `v*` 标签时自动构建并把两个 exe 附加到 Release。
 
@@ -161,15 +163,20 @@ tray-monitor-app/
 | 左键点图标后面板一闪而过 / 一片黑 | 旧版用「窗口失焦就自动收起」，点托盘时 Windows 会先把焦点交给任务栏，面板刚弹出就被关掉；且透明窗口在部分 GPU / 远程会话下会渲染成纯黑。现已改为不透明窗口 + 显式关闭（再点托盘 / `×` / `Esc`），不再依赖失焦判断。 |
 | 每点一次托盘，面板就长高一点 | 旧版定位时读取窗口 `getSize()` 再算 `y = 托盘y - h - 8`；在 150% 缩放下 Windows 回报的尺寸每次多 1～2px，底边固定、顶边上移，形成正反馈。现改用固定设计尺寸计算位置，且只在新建窗口 / 内容高度变化 / 显示器变化时定位一次。 |
 | 弹出后要等好几秒再点才有反应 | 旧版要求面板「稳定显示 > 800ms」才允许再点收起，但每次点击的幂等 `show` 都会把这个计时清零，连点时不断续期，形成计时棘轮。现改为一次有效点击就是一次开关，只用 350ms 去抖合并双击/连点，且去抖不会刷新计时。 |
-| 温度 / GPU 显示 `--`      | 这两项依赖 LibreHardwareMonitor（开启 Web Server :8085）或 NVIDIA 驱动自带的 `nvidia-smi`，不装不影响其它指标。 |
+| 温度 / GPU 显示 `--`      | 这两项依赖 LibreHardwareMonitor（开启 Web Server :8085）或 NVIDIA 驱动自带的 `nvidia-smi`，不装不影响其它指标。Windows 标准 ACPI 温度类（`MSAcpi_ThermalZoneTemperature`、`Win32_TemperatureProbe`）在多数现代笔记本上只有占位实例、没有真实读数，所以不能替代 LHM。 |
+| 联想机型不想装 LHM 就想看 CPU 温度/风扇 | 用「以管理员身份运行」启动 TrayMetrics，程序会读 `root\WMI\LENOVO_OTHER_METHOD` 的 BIOS 传感器（CPU/GPU 温度、双风扇、PL1/TGP）。首次探测失败会永久跳过，不会反复报错；改完权限后点右键「重新检测传感器」即可重试。 |
 | 杀软报毒 / SmartScreen 拦截 | exe 未做商业签名，源码与构建脚本全部公开，可自行 `npm run dist` 复现构建。                                       |
 | 从 CI/脚本启动后立刻退出        | 检查并清除 `ELECTRON_RUN_AS_NODE` 环境变量，见上文「打包与发布」。                                         |
 | 想彻底卸载                 | 安装包版走系统「应用和功能」；便携版直接删除 exe，再手动删 `%APPDATA%\TrayMetrics`。                              |
 
+## 参考项目
+
+硬件信息采集部分参考了 [LenovoLegionToolkit](https://github.com/BartoszCichecki/LenovoLegionToolkit)（GPL-3.0）：`root\WMI` 下联想专有类的命名与 `CapabilityID` 取值、以及用 PDH 计数器推算 CPU 真实频率而非依赖 WMI 基频的思路。本项目只用这些公开的系统接口事实，用 PowerShell / Node 自行实现调用，**未复制其 C# 源码**。
+
 ## 贡献
 
-欢迎提 Issue / PR。改采集逻辑时建议先跑 `npm run probe` 与 `npm run selftest`，并说明你的硬件环境（CPU / GPU / 是否有电池 / 是否装 LHM），因为功率与温度的数据源高度依赖机器。
+欢迎提 Issue / PR。改采集逻辑时建议先跑 `npm run probe` 与 `npm run selftest`，并说明你的硬件环境（CPU / GPU / 是否有电池 / 是否装 LHM / 是否以管理员运行），因为功率与温度的数据源高度依赖机器。
 
 ## 许可
 
-[MIT](./LICENSE)。若启用 LibreHardwareMonitor 获取温度，请同时遵守其许可；`nvidia-smi` 属于 NVIDIA 驱动组件。
+[MIT](./LICENSE)。若启用 LibreHardwareMonitor 获取温度，请同时遵守其许可；`nvidia-smi` 属于 NVIDIA 驱动组件；联想 WMI 接口由 Lenovo 的驱动与 BIOS 提供。
