@@ -25,15 +25,19 @@ jobs:
         run: npm ci
 
       # sign 为 no-op（无商业证书）；一次构建产出 NSIS 安装包 + 便携版。
-      # 用 bash 显式调用本地 electron-builder，并打印 dist 便于排查产物路径。
+      # 直接以 node 调用 electron-builder 的 CLI 入口，避免 .bin shim 差异。
       - name: Build NSIS installer and portable exe
         shell: bash
-        env:
-          DEBUG: electron-builder
         run: |
-          npx --no-install electron-builder --win --x64 --config electron-builder.js
-          echo "=== dist contents ==="
-          ls -lh dist/
+          echo "=== toolchain ==="
+          node -v
+          node ./node_modules/electron-builder/cli.js --version
+          node -e "console.log('electron:', require('electron/package.json').version)"
+          ls -lh node_modules/electron/dist/electron.exe || true
+          echo "=== building ==="
+          node ./node_modules/electron-builder/cli.js --win --x64 --config electron-builder.js
+          echo "=== dist ==="
+          ls -lh dist/*.exe
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -47,4 +51,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.exe
-          generate_release_notes: true
+          overwrite_files: true
